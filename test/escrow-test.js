@@ -30,6 +30,10 @@ describe("Escrow", async () => {
       );
   });
 
+  it("Should upgrade", async () => {
+    await upgrades.upgradeProxy(escrow.address, Escrow, { kind: "uups" });
+  });
+
   it("Should create order", async function () {
     //     address _tokenToGive,
     //     address _tokenToTake,
@@ -88,7 +92,13 @@ describe("Escrow", async () => {
       100000000000000
     );
 
+    await expect(escrow.connect(addr2).cancelOrder(0)).to.be.revertedWith(
+      "not maker"
+    );
+
     await escrow.cancelOrder(0);
+
+    await expect(escrow.cancelOrder(0)).to.be.revertedWith("closed order");
 
     const [, , , , , filled, , ,] = await escrow.order(0);
 
@@ -116,6 +126,96 @@ describe("Escrow", async () => {
 
     expect((await tokenA.balanceOf(addr2.address)).toNumber()).to.equal(
       1000000
+    );
+  });
+
+  it("Should allow partial fill", async function () {
+    await escrow.createOrder(
+      tokenA.address,
+      tokenB.address,
+      1000000,
+      1000,
+      100000000000000
+    );
+
+    await escrow.connect(addr2).fillOrder(0, 100000);
+    await escrow.connect(addr2).fillOrder(0, 100000);
+    await escrow.connect(addr2).fillOrder(0, 800000);
+
+    const [, , , , , filled, , ,] = await escrow.order(0);
+
+    expect(filled.toNumber()).to.equal(1000000);
+
+    expect((await tokenA.balanceOf(escrow.address)).toNumber()).to.equal(0);
+
+    expect((await tokenB.balanceOf(addr1.address)).toNumber()).to.equal(1000);
+
+    expect((await tokenA.balanceOf(addr2.address)).toNumber()).to.equal(
+      1000000
+    );
+  });
+
+  it("Should check fill", async function () {
+    await escrow.createOrder(
+      tokenA.address,
+      tokenB.address,
+      1000000,
+      1000,
+      100000000000000
+    );
+
+    await escrow.connect(addr2).fillOrder(0, 1000000);
+
+    await expect(
+      escrow.connect(addr2).fillOrder(0, 1000000)
+    ).to.be.revertedWith("amount too high or closed order");
+  });
+
+  it("Should check expire", async function () {
+    await escrow.createOrder(tokenA.address, tokenB.address, 1000000, 1000, 0);
+
+    await expect(
+      escrow.connect(addr2).fillOrder(0, 1000000)
+    ).to.be.revertedWith("order expired");
+  });
+
+  it("Should check amount 0", async function () {
+    await escrow.createOrder(
+      tokenA.address,
+      tokenB.address,
+      1000000,
+      1000,
+      100000000000
+    );
+
+    await expect(escrow.connect(addr2).fillOrder(0, 1)).to.be.revertedWith(
+      "amount too low"
+    );
+  });
+
+  it("Should check pause", async () => {
+    await escrow.pause();
+
+    await expect(
+      escrow.createOrder(
+        tokenA.address,
+        tokenB.address,
+        1000000,
+        1000,
+        10000000000000,
+        0
+      )
+    ).to.be.reverted;
+
+    await escrow.unPause();
+
+    escrow.createOrder(
+      tokenA.address,
+      tokenB.address,
+      1000000,
+      1000,
+      10000000000000,
+      0
     );
   });
 });

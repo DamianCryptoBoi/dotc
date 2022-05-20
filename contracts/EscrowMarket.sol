@@ -57,6 +57,14 @@ contract EscrowMarket is
         __UUPSUpgradeable_init();
     }
 
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unPause() external onlyOwner {
+        _unpause();
+    }
+
     function createOrder(
         address _makerToken,
         address _takerToken,
@@ -142,8 +150,6 @@ contract EscrowMarket is
             canceledOrder.filled < canceledOrder.makingAmount,
             "closed order"
         );
-
-        require(block.timestamp <= canceledOrder.expireTime, "expired");
 
         uint256 remainingToken = canceledOrder.makingAmount -
             canceledOrder.filled;

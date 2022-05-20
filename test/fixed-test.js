@@ -74,4 +74,90 @@ describe("Fixed", async () => {
     expect(await tokenB.balanceOf(addr1.address)).to.be.equal(1000);
     expect(await tokenA.balanceOf(addr2.address)).to.be.equal(1000);
   });
+
+  it("should cancel order", async () => {
+    order = {
+      maker: addr1.address,
+      makerToken: tokenA.address,
+      takerToken: tokenB.address,
+      makingAmount: 1000,
+      takingAmount: 1000,
+      expireTime: 10000000000,
+      salt: 69,
+    };
+
+    sig = await sign(order, fixed.address, addr1);
+
+    const hash = await fixed.hashOrder(order);
+
+    await fixed.cancelOrder(hash);
+
+    await expect(fixed.connect(addr2).fillOrder(order, sig)).to.be.revertedWith(
+      "closed"
+    );
+  });
+
+  it("should check signature", async () => {
+    order = {
+      maker: addr1.address,
+      makerToken: tokenA.address,
+      takerToken: tokenB.address,
+      makingAmount: 1000,
+      takingAmount: 1000,
+      expireTime: 10000000000,
+      salt: 69,
+    };
+
+    order1 = {
+      maker: addr1.address,
+      makerToken: tokenA.address,
+      takerToken: tokenB.address,
+      makingAmount: 1000,
+      takingAmount: 10000,
+      expireTime: 10000000000,
+      salt: 69,
+    };
+
+    sig = await sign(order, fixed.address, addr1);
+
+    await expect(
+      fixed.connect(addr2).fillOrder(order1, sig)
+    ).to.be.revertedWith("bad signature");
+  });
+
+  it("should check amount", async () => {
+    order = {
+      maker: addr1.address,
+      makerToken: tokenA.address,
+      takerToken: tokenB.address,
+      makingAmount: 0,
+      takingAmount: 1000,
+      expireTime: 100000000000,
+      salt: 69,
+    };
+
+    sig = await sign(order, fixed.address, addr1);
+
+    await expect(fixed.connect(addr2).fillOrder(order, sig)).to.be.revertedWith(
+      "can't swap 0 amount"
+    );
+  });
+
+  it("should check expire time", async () => {
+    order = {
+      maker: addr1.address,
+      makerToken: tokenA.address,
+      takerToken: tokenB.address,
+      makingAmount: 1000,
+      takingAmount: 1000,
+      expireTime: 0,
+      salt: 69,
+    };
+
+    sig = await sign(order, fixed.address, addr1);
+
+    await expect(fixed.connect(addr2).fillOrder(order, sig)).to.be.revertedWith(
+      "order expired"
+    );
+  });
 });

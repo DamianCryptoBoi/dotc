@@ -8,8 +8,4 @@ contract MockToken is ERC20, Ownable {
     constructor() ERC20("MockToken", "MTK") {
         _mint(msg.sender, 100000000 * 10**decimals());
     }
-
-    function mint(address to, uint256 amount) public onlyOwner {
-        _mint(to, amount);
-    }
 }
