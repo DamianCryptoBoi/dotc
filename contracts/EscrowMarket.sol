@@ -7,6 +7,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol";
 
 contract EscrowMarket is
     Initializable,
@@ -15,6 +16,7 @@ contract EscrowMarket is
     UUPSUpgradeable
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
+    using AddressUpgradeable for address payable;
 
     struct Order {
         address maker;
@@ -45,16 +47,32 @@ contract EscrowMarket is
 
     event OrderCancelled(uint256 id);
 
+    event FeeChanged(uint256 makerFee, uint256 takerFee);
+
+    event FeeRecipientChanged(address feeRecipient);
+
     mapping(uint256 => Order) public order;
     uint256 public nextOrderId;
+
+    uint256 public makerFee;
+    uint256 public takerFee;
+    uint256 public constant FEE_DENOMINATOR = 10000;
+    address public feeRecipient;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() initializer {}
 
-    function initialize() public initializer {
+    function initialize(
+        uint256 _makerFee,
+        uint256 _takerFee,
+        address _feeRecipient
+    ) public initializer {
         __Pausable_init();
         __Ownable_init();
         __UUPSUpgradeable_init();
+        makerFee = _makerFee;
+        takerFee = _takerFee;
+        feeRecipient = _feeRecipient;
     }
 
     function pause() external onlyOwner {
@@ -65,20 +83,56 @@ contract EscrowMarket is
         _unpause();
     }
 
+    function setFee(uint256 _makerFee, uint256 _takerFee) external onlyOwner {
+        makerFee = _makerFee;
+        takerFee = _takerFee;
+        emit FeeChanged(_makerFee, _takerFee);
+    }
+
+    function setFeeRecipient(address _feeRecipient) external onlyOwner {
+        feeRecipient = _feeRecipient;
+        emit FeeRecipientChanged(_feeRecipient);
+    }
+
+    function _takeFee(
+        address _from,
+        address _tokenAddress,
+        uint256 _amount,
+        uint256 _feeRatio
+    ) private returns (uint256) {
+        uint256 feeAmount = (_amount * _feeRatio) / FEE_DENOMINATOR;
+
+        if (_tokenAddress == address(0)) {
+            payable(feeRecipient).sendValue(feeAmount);
+        } else {
+            if (_from == address(this)) {
+                IERC20Upgradeable(_tokenAddress).safeTransfer(
+                    feeRecipient,
+                    feeAmount
+                );
+            } else {
+                IERC20Upgradeable(_tokenAddress).safeTransferFrom(
+                    _from,
+                    feeRecipient,
+                    feeAmount
+                );
+            }
+        }
+
+        return _amount - feeAmount;
+    }
+
     function createOrder(
         address _makerToken,
         address _takerToken,
         uint256 _makingAmount,
         uint256 _takingAmount,
         uint256 _expireTime
-    ) external whenNotPaused {
+    ) external payable whenNotPaused {
+        require(_makerToken != _takerToken, "invalid token");
         uint256 currentId = nextOrderId;
         nextOrderId++;
-        IERC20Upgradeable(_makerToken).safeTransferFrom(
-            msg.sender,
-            address(this),
-            _makingAmount
-        );
+
         order[currentId] = Order(
             msg.sender,
             _makerToken,
@@ -88,6 +142,16 @@ contract EscrowMarket is
             0,
             _expireTime
         );
+
+        if (_makerToken == address(0)) {
+            require(msg.value == _makingAmount, "invalid eth value");
+        } else {
+            IERC20Upgradeable(_makerToken).safeTransferFrom(
+                msg.sender,
+                address(this),
+                _makingAmount
+            );
+        }
 
         emit OrderCreated(
             currentId,
@@ -100,46 +164,65 @@ contract EscrowMarket is
         );
     }
 
-    function fillOrder(uint256 _id, uint256 _acceptedMakingAmount)
+    function fillOrder(uint256 _id, uint256 _giveAmount)
         external
+        payable
         whenNotPaused
     {
         Order storage acceptedOrder = order[_id];
 
-        require(
-            acceptedOrder.filled + _acceptedMakingAmount <=
-                acceptedOrder.makingAmount,
-            "amount too high or closed order"
-        );
-        acceptedOrder.filled += _acceptedMakingAmount;
-
         require(block.timestamp < acceptedOrder.expireTime, "order expired");
 
-        uint256 acceptedTakingAmount = (
-            (_acceptedMakingAmount * acceptedOrder.takingAmount)
-        ) / acceptedOrder.makingAmount;
+        uint256 fillAmount = (_giveAmount * acceptedOrder.makingAmount) /
+            acceptedOrder.takingAmount;
 
-        require(acceptedTakingAmount > 0, "amount too low");
+        require(_giveAmount > 0 && fillAmount > 0, "invalid amounts");
 
-        // move takerToken from sender to maker
-        IERC20Upgradeable(acceptedOrder.takerToken).safeTransferFrom(
+        require(
+            acceptedOrder.filled + fillAmount <= acceptedOrder.makingAmount,
+            "amount too high or closed order"
+        );
+        acceptedOrder.filled += fillAmount;
+
+        //transfer fee and calculate amounts
+
+        uint256 makerAmount = _takeFee(
             msg.sender,
-            acceptedOrder.maker,
-            acceptedTakingAmount
+            acceptedOrder.takerToken,
+            _giveAmount,
+            takerFee
         );
 
-        // moke token A from contract to sender
-        IERC20Upgradeable(acceptedOrder.makerToken).safeTransfer(
-            msg.sender,
-            _acceptedMakingAmount
+        uint256 takerAmount = _takeFee(
+            address(this),
+            acceptedOrder.makerToken,
+            fillAmount,
+            makerFee
         );
 
-        emit OrderFilled(
-            _id,
-            msg.sender,
-            _acceptedMakingAmount,
-            acceptedTakingAmount
-        );
+        // $ from taker => maker
+        if (acceptedOrder.takerToken == address(0)) {
+            require(msg.value == _giveAmount, "invalid eth value");
+            payable(acceptedOrder.maker).sendValue(makerAmount);
+        } else {
+            IERC20Upgradeable(acceptedOrder.takerToken).safeTransferFrom(
+                msg.sender,
+                acceptedOrder.maker,
+                makerAmount
+            );
+        }
+
+        // $ from contract => taker
+        if (acceptedOrder.makerToken == address(0)) {
+            payable(msg.sender).sendValue(takerAmount);
+        } else {
+            IERC20Upgradeable(acceptedOrder.makerToken).safeTransfer(
+                msg.sender,
+                takerAmount
+            );
+        }
+
+        emit OrderFilled(_id, msg.sender, fillAmount, _giveAmount);
     }
 
     function cancelOrder(uint256 _id) external whenNotPaused {
@@ -151,15 +234,19 @@ contract EscrowMarket is
             "closed order"
         );
 
-        uint256 remainingToken = canceledOrder.makingAmount -
+        uint256 remainingAmount = canceledOrder.makingAmount -
             canceledOrder.filled;
 
         canceledOrder.filled = canceledOrder.makingAmount;
 
-        IERC20Upgradeable(canceledOrder.makerToken).transfer(
-            canceledOrder.maker,
-            remainingToken
-        );
+        if (canceledOrder.makerToken == address(0)) {
+            payable(canceledOrder.maker).sendValue(remainingAmount);
+        } else {
+            IERC20Upgradeable(canceledOrder.makerToken).transfer(
+                canceledOrder.maker,
+                remainingAmount
+            );
+        }
 
         emit OrderCancelled(_id);
     }

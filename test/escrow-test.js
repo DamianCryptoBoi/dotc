@@ -1,12 +1,19 @@
+const { ZERO_ADDRESS } = require("@openzeppelin/test-helpers/src/constants");
 const { expect } = require("chai");
-const { ethers, upgrades } = require("hardhat");
+const { ethers, upgrades, waffle } = require("hardhat");
+
+const provider = waffle.provider;
 
 describe("Escrow", async () => {
   beforeEach(async () => {
-    [addr1, addr2] = await ethers.getSigners();
+    [addr1, addr2, feeRecipient] = await ethers.getSigners();
 
     Escrow = await ethers.getContractFactory("EscrowMarket");
-    escrow = await upgrades.deployProxy(Escrow, [], { kind: "uups" });
+    escrow = await upgrades.deployProxy(
+      Escrow,
+      [100, 100, feeRecipient.address],
+      { kind: "uups" }
+    );
 
     ERC20 = await ethers.getContractFactory("MockToken");
     tokenA = await ERC20.deploy();
@@ -34,6 +41,17 @@ describe("Escrow", async () => {
     await upgrades.upgradeProxy(escrow.address, Escrow, { kind: "uups" });
   });
 
+  it("Should set fees and fee fee recipient", async () => {
+    await escrow.setFee(200, 200);
+
+    await escrow.setFeeRecipient(addr1.address);
+
+    expect((await escrow.makerFee()).toNumber()).to.be.equal(200);
+    expect((await escrow.takerFee()).toNumber()).to.be.equal(200);
+
+    expect(await escrow.feeRecipient()).to.be.equal(addr1.address);
+  });
+
   it("Should create order", async function () {
     //     address _tokenToGive,
     //     address _tokenToTake,
@@ -41,6 +59,17 @@ describe("Escrow", async () => {
     //     uint256 _amountToTake,
     //     uint256 _listingTime,
     //     uint256 _expireTime
+
+    await expect(
+      escrow.createOrder(
+        tokenA.address,
+        tokenA.address,
+        1000000,
+        1000,
+        100000000000000
+      )
+    ).to.be.revertedWith("invalid token");
+
     await escrow.createOrder(
       tokenA.address,
       tokenB.address,
@@ -83,6 +112,52 @@ describe("Escrow", async () => {
     );
   });
 
+  it("Should create order ETH", async function () {
+    await expect(
+      escrow.createOrder(
+        ZERO_ADDRESS,
+        tokenB.address,
+        1000000,
+        1000,
+        100000000000000,
+        { value: 1 }
+      )
+    ).to.be.revertedWith("invalid eth value");
+
+    await escrow.createOrder(
+      ZERO_ADDRESS,
+      tokenB.address,
+      1000000,
+      1000,
+      100000000000000,
+      { value: 1000000 }
+    );
+
+    expect((await escrow.nextOrderId()).toNumber()).to.equal(1);
+
+    const [
+      maker,
+      tokenToGive,
+      tokenToTake,
+      amountToGive,
+      amountToTake,
+      filled,
+      expireTime,
+    ] = await escrow.order(0);
+
+    expect(maker).to.equal(addr1.address);
+    expect(tokenToGive).to.equal(ZERO_ADDRESS);
+    expect(tokenToTake).to.equal(tokenB.address);
+    expect(amountToGive.toNumber()).to.equal(1000000);
+    expect(amountToTake.toNumber()).to.equal(1000);
+    expect(filled.toNumber()).to.equal(0);
+    expect(expireTime.toNumber()).to.equal(100000000000000);
+
+    expect((await provider.getBalance(escrow.address)).toNumber()).to.equal(
+      1000000
+    );
+  });
+
   it("Should cancel order", async function () {
     await escrow.createOrder(
       tokenA.address,
@@ -105,6 +180,25 @@ describe("Escrow", async () => {
     expect(filled.toNumber()).to.equal(1000000);
   });
 
+  it("Should cancel order ETH", async function () {
+    await escrow.createOrder(
+      ZERO_ADDRESS,
+      tokenB.address,
+      1000000,
+      1000,
+      100000000000000,
+      { value: 1000000 }
+    );
+
+    await escrow.cancelOrder(0);
+
+    await expect(escrow.cancelOrder(0)).to.be.revertedWith("closed order");
+
+    const [, , , , , filled, , ,] = await escrow.order(0);
+
+    expect(filled.toNumber()).to.equal(1000000);
+  });
+
   it("Should fill order", async function () {
     await escrow.createOrder(
       tokenA.address,
@@ -114,7 +208,7 @@ describe("Escrow", async () => {
       100000000000000
     );
 
-    await escrow.connect(addr2).fillOrder(0, 1000000);
+    await escrow.connect(addr2).fillOrder(0, 1000);
 
     const [, , , , , filled, , ,] = await escrow.order(0);
 
@@ -122,10 +216,73 @@ describe("Escrow", async () => {
 
     expect((await tokenA.balanceOf(escrow.address)).toNumber()).to.equal(0);
 
-    expect((await tokenB.balanceOf(addr1.address)).toNumber()).to.equal(1000);
+    expect((await tokenB.balanceOf(addr1.address)).toNumber()).to.equal(
+      1000 - 10
+    );
+
+    expect((await tokenB.balanceOf(feeRecipient.address)).toNumber()).to.equal(
+      10
+    );
 
     expect((await tokenA.balanceOf(addr2.address)).toNumber()).to.equal(
-      1000000
+      1000000 - 10000
+    );
+
+    expect((await tokenA.balanceOf(feeRecipient.address)).toNumber()).to.equal(
+      10000
+    );
+  });
+
+  it("Should fill order ETH: maker", async function () {
+    await escrow.createOrder(
+      ZERO_ADDRESS,
+      tokenB.address,
+      1000000,
+      1000,
+      100000000000000,
+      { value: 1000000 }
+    );
+
+    await escrow.connect(addr2).fillOrder(0, 1000);
+
+    const [, , , , , filled, , ,] = await escrow.order(0);
+
+    expect(filled.toNumber()).to.equal(1000000);
+
+    expect((await tokenB.balanceOf(addr1.address)).toNumber()).to.equal(
+      1000 - 10
+    );
+
+    expect((await tokenB.balanceOf(feeRecipient.address)).toNumber()).to.equal(
+      10
+    );
+  });
+
+  it("Should fill order ETH: taker", async function () {
+    await escrow.createOrder(
+      tokenA.address,
+      ZERO_ADDRESS,
+      1000000,
+      1000,
+      100000000000000
+    );
+
+    await expect(
+      escrow.connect(addr2).fillOrder(0, 1000, { value: 10 })
+    ).to.be.revertedWith("invalid eth value");
+
+    await escrow.connect(addr2).fillOrder(0, 1000, { value: 1000 });
+
+    const [, , , , , filled, , ,] = await escrow.order(0);
+
+    expect(filled.toNumber()).to.equal(1000000);
+
+    expect((await tokenA.balanceOf(addr2.address)).toNumber()).to.equal(
+      1000000 - 10000
+    );
+
+    expect((await tokenA.balanceOf(feeRecipient.address)).toNumber()).to.equal(
+      10000
     );
   });
 
@@ -138,9 +295,9 @@ describe("Escrow", async () => {
       100000000000000
     );
 
-    await escrow.connect(addr2).fillOrder(0, 100000);
-    await escrow.connect(addr2).fillOrder(0, 100000);
-    await escrow.connect(addr2).fillOrder(0, 800000);
+    await escrow.connect(addr2).fillOrder(0, 100);
+    await escrow.connect(addr2).fillOrder(0, 100);
+    await escrow.connect(addr2).fillOrder(0, 800);
 
     const [, , , , , filled, , ,] = await escrow.order(0);
 
@@ -148,10 +305,20 @@ describe("Escrow", async () => {
 
     expect((await tokenA.balanceOf(escrow.address)).toNumber()).to.equal(0);
 
-    expect((await tokenB.balanceOf(addr1.address)).toNumber()).to.equal(1000);
+    expect((await tokenB.balanceOf(addr1.address)).toNumber()).to.equal(
+      1000 - 10
+    );
+
+    expect((await tokenB.balanceOf(feeRecipient.address)).toNumber()).to.equal(
+      10
+    );
 
     expect((await tokenA.balanceOf(addr2.address)).toNumber()).to.equal(
-      1000000
+      1000000 - 10000
+    );
+
+    expect((await tokenA.balanceOf(feeRecipient.address)).toNumber()).to.equal(
+      10000
     );
   });
 
@@ -164,11 +331,11 @@ describe("Escrow", async () => {
       100000000000000
     );
 
-    await escrow.connect(addr2).fillOrder(0, 1000000);
+    await escrow.connect(addr2).fillOrder(0, 1000);
 
-    await expect(
-      escrow.connect(addr2).fillOrder(0, 1000000)
-    ).to.be.revertedWith("amount too high or closed order");
+    await expect(escrow.connect(addr2).fillOrder(0, 1000)).to.be.revertedWith(
+      "amount too high or closed order"
+    );
   });
 
   it("Should check expire", async function () {
@@ -184,12 +351,12 @@ describe("Escrow", async () => {
       tokenA.address,
       tokenB.address,
       1000000,
-      1000,
+      1000000000000000,
       100000000000
     );
 
     await expect(escrow.connect(addr2).fillOrder(0, 1)).to.be.revertedWith(
-      "amount too low"
+      "invalid amounts"
     );
   });
 

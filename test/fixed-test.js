@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers, network } = require("hardhat");
+const { ZERO_ADDRESS } = require("@openzeppelin/test-helpers/src/constants");
 
 const types = {
   Order: [
@@ -28,10 +29,10 @@ const sign = async (order, marketAddress, signer) => {
 
 describe("Fixed", async () => {
   beforeEach(async () => {
-    [addr1, addr2] = await ethers.getSigners();
+    [addr1, addr2, feeRecipient] = await ethers.getSigners();
 
     Fixed = await ethers.getContractFactory("FixedMarket");
-    fixed = await Fixed.deploy();
+    fixed = await Fixed.deploy(100, 100, feeRecipient.address);
     await fixed.deployed();
 
     ERC20 = await ethers.getContractFactory("MockToken");
@@ -62,7 +63,7 @@ describe("Fixed", async () => {
       makerToken: tokenA.address,
       takerToken: tokenB.address,
       makingAmount: 1000,
-      takingAmount: 1000,
+      takingAmount: 1000000,
       expireTime: 10000000000,
       salt: 69,
     };
@@ -71,8 +72,52 @@ describe("Fixed", async () => {
 
     await fixed.connect(addr2).fillOrder(order, sig);
 
-    expect(await tokenB.balanceOf(addr1.address)).to.be.equal(1000);
-    expect(await tokenA.balanceOf(addr2.address)).to.be.equal(1000);
+    expect(await tokenB.balanceOf(addr1.address)).to.be.equal(1000000 - 10000);
+    expect(await tokenB.balanceOf(feeRecipient.address)).to.be.equal(10000);
+
+    expect(await tokenA.balanceOf(addr2.address)).to.be.equal(1000 - 10);
+    expect(await tokenA.balanceOf(feeRecipient.address)).to.be.equal(10);
+  });
+
+  it("should fill order ETH taker", async () => {
+    order = {
+      maker: addr1.address,
+      makerToken: tokenA.address,
+      takerToken: ZERO_ADDRESS,
+      makingAmount: 1000,
+      takingAmount: 1000000,
+      expireTime: 10000000000,
+      salt: 69,
+    };
+
+    sig = await sign(order, fixed.address, addr1);
+
+    await expect(
+      fixed.connect(addr2).fillOrder(order, sig, { value: 100000 })
+    ).to.be.revertedWith("invalid eth value");
+
+    await fixed.connect(addr2).fillOrder(order, sig, { value: 1000000 });
+
+    expect(await tokenA.balanceOf(addr2.address)).to.be.equal(1000 - 10);
+    expect(await tokenA.balanceOf(feeRecipient.address)).to.be.equal(10);
+  });
+
+  it("should not allow ETH maker ", async () => {
+    order = {
+      maker: addr1.address,
+      makerToken: ZERO_ADDRESS,
+      takerToken: tokenB.address,
+      makingAmount: 1000,
+      takingAmount: 1000000,
+      expireTime: 10000000000,
+      salt: 69,
+    };
+
+    sig = await sign(order, fixed.address, addr1);
+
+    await expect(fixed.connect(addr2).fillOrder(order, sig)).to.be.revertedWith(
+      "invalid maker token"
+    );
   });
 
   it("should cancel order", async () => {
