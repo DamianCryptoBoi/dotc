@@ -43,6 +43,6 @@ module.exports = {
     currency: "USD",
   },
   etherscan: {
-    apiKey: process.env.ETHERSCAN_API_KEY,
+    apiKey: { rinkeby: "E2DE24B9RAGAGAPH7HP69FYIUIITI2HGQN" },
   },
 };

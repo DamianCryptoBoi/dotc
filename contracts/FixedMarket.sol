@@ -7,8 +7,6 @@ import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
-import "hardhat/console.sol";
-
 contract FixedMarket is EIP712("Fixed Order Market", "1.0") {
     using SafeERC20 for IERC20;
     using Address for address payable;

@@ -41,7 +41,7 @@ describe("Escrow", async () => {
     await upgrades.upgradeProxy(escrow.address, Escrow, { kind: "uups" });
   });
 
-  it("Should set fees and fee fee recipient", async () => {
+  it("Should set fees and fee recipient", async () => {
     await escrow.setFee(200, 200);
 
     await escrow.setFeeRecipient(addr1.address);
@@ -53,13 +53,6 @@ describe("Escrow", async () => {
   });
 
   it("Should create order", async function () {
-    //     address _tokenToGive,
-    //     address _tokenToTake,
-    //     uint256 _amountToGive,
-    //     uint256 _amountToTake,
-    //     uint256 _listingTime,
-    //     uint256 _expireTime
-
     await expect(
       escrow.createOrder(
         tokenA.address,
