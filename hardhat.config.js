@@ -28,6 +28,7 @@ module.exports = {
       blockGasLimit: 0x1fffffffffffff,
       allowUnlimitedContractSize: true,
       timeout: 1800000,
+      chainId: 4,
     },
     rinkeby: {
       url: process.env.PROVIDER_URL,
@@ -36,6 +37,7 @@ module.exports = {
       blockGasLimit: 0x1fffffffffffff,
       allowUnlimitedContractSize: true,
       timeout: 1800000,
+      chainId: 4,
     },
   },
   gasReporter: {

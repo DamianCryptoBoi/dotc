@@ -33,7 +33,15 @@ contract FixedMarket is EIP712("Fixed Order Market", "1.0") {
     uint256 public constant FEE_DENOMINATOR = 10000;
     address public feeRecipient;
 
-    event OrderFilled(bytes32 orderHash, address taker, uint256 makingAmount);
+    event OrderFilled(
+        bytes32 orderHash,
+        address maker,
+        address taker,
+        address makerToken,
+        address takerToken,
+        uint256 makingAmount,
+        uint256 takingAmount
+    );
 
     event OrderCancelled(bytes32 orderHash, address maker);
 
@@ -146,6 +154,14 @@ contract FixedMarket is EIP712("Fixed Order Market", "1.0") {
             );
         }
 
-        emit OrderFilled(orderHash, msg.sender, makingAmount);
+        emit OrderFilled(
+            orderHash,
+            _order.maker,
+            msg.sender,
+            address(_order.makerToken),
+            address(_order.takerToken),
+            makingAmount,
+            takingAmount
+        );
     }
 }
